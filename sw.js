@@ -1,7 +1,7 @@
 // Drone Flight Simulator service worker (site root scope).
-// Caches the whole simulator on first visit so the home-screen app button
-// launches it instantly, and keeps it working with no connection at all.
-var CACHE = 'drone-sim-v1';
+// v2: navigations are network-first, so the app always opens the newest
+// version when online, and still launches from cache when offline.
+var CACHE = 'drone-sim-v2';
 var CORE = [
   '/index.html',
   '/manifest.json',
@@ -33,22 +33,34 @@ self.addEventListener('activate', function (event) {
 
 self.addEventListener('fetch', function (event) {
   if (event.request.method !== 'GET') return;
+
+  // Page loads: always try the network first so updates reach the phone.
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request).then(function (res) {
+        if (res && res.ok) {
+          var copy = res.clone();
+          caches.open(CACHE).then(function (cache) { cache.put(event.request, copy); });
+        }
+        return res;
+      }).catch(function () {
+        return caches.match('/index.html', { ignoreSearch: true });
+      })
+    );
+    return;
+  }
+
+  // Icons, manifest and other files: serve from cache, fetch if missing.
   event.respondWith(
     caches.match(event.request, { ignoreSearch: true }).then(function (hit) {
       if (hit) return hit;
       return fetch(event.request).then(function (res) {
-        // keep a copy of anything same-origin the app asks for, so a
-        // second launch is fully cached even on a flaky connection
         if (res && res.ok && new URL(event.request.url).origin === self.location.origin) {
           var copy = res.clone();
           caches.open(CACHE).then(function (cache) { cache.put(event.request, copy); });
         }
         return res;
       }).catch(function () {
-        // offline and not cached: page loads fall back to the simulator
-        if (event.request.mode === 'navigate') {
-          return caches.match('/index.html', { ignoreSearch: true });
-        }
         return Response.error();
       });
     })
